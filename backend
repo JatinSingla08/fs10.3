@@ -1,0 +1,101 @@
+const express = require('express')
+const jwt = require('jsonwebtoken')
+const bcrypt = require('bcrypt')
+const multer = require('multer')
+const cors = require('cors')
+const { Sequelize, DataTypes } = require('sequelize')
+
+const SECRET = 'jwt_secret'
+const app = express()
+app.use(express.json())
+app.use(cors())
+
+// Database (change for your RDS credentials)
+const sequelize = new Sequelize('socialdb', 'admin', 'password', {
+  host: 'your-rds-endpoint.amazonaws.com',
+  dialect: 'mysql',
+})
+
+// Models
+const User = sequelize.define('User', {
+  username: { type: DataTypes.STRING, unique: true },
+  password: DataTypes.STRING,
+})
+const Post = sequelize.define('Post', {
+  text: DataTypes.TEXT,
+  imageUrl: DataTypes.STRING,
+})
+const Like = sequelize.define('Like', {})
+const Comment = sequelize.define('Comment', { text: DataTypes.TEXT })
+
+User.hasMany(Post)
+Post.belongsTo(User)
+Post.hasMany(Comment)
+Comment.belongsTo(User)
+Comment.belongsTo(Post)
+User.belongsToMany(Post, { through: Like, as: 'LikedPosts' })
+
+// Auth Middleware
+function auth(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1]
+  if (!token) return res.status(401).send('No token')
+  try {
+    req.user = jwt.verify(token, SECRET)
+    next()
+  } catch {
+    res.status(401).send('Invalid token')
+  }
+}
+
+// Image Upload (Local, replace with AWS S3)
+const upload = multer({ dest: 'uploads/' })
+
+// Routes
+app.post('/register', async (req, res) => {
+  const { username, password } = req.body
+  const hash = await bcrypt.hash(password, 10)
+  try {
+    await User.create({ username, password: hash })
+    res.send('Registered')
+  } catch {
+    res.status(400).send('Username taken')
+  }
+})
+
+app.post('/login', async (req, res) => {
+  const { username, password } = req.body
+  const u = await User.findOne({ where: { username } })
+  if (!u) return res.status(400).send('Invalid user')
+  const ok = await bcrypt.compare(password, u.password)
+  if (!ok) return res.status(400).send('Wrong password')
+  const token = jwt.sign({ id: u.id, username: u.username }, SECRET)
+  res.json({ token })
+})
+
+app.post('/posts', auth, upload.single('image'), async (req, res) => {
+  const imageUrl = req.file ? req.file.path : null
+  const post = await Post.create({ text: req.body.text, imageUrl, UserId: req.user.id })
+  res.json(post)
+})
+
+app.get('/feed', async (req, res) => {
+  const posts = await Post.findAll({
+    include: [{ model: User, attributes: ['username'] }, { model: Comment, include: [User] }],
+    order: [['id', 'DESC']],
+  })
+  res.json(posts)
+})
+
+app.post('/like/:postId', auth, async (req, res) => {
+  const post = await Post.findByPk(req.params.postId)
+  await post.addLikedPosts(req.user.id)
+  res.send('Liked')
+})
+
+app.post('/comment/:postId', auth, async (req, res) => {
+  const c = await Comment.create({ text: req.body.text, UserId: req.user.id, PostId: req.params.postId })
+  res.json(c)
+})
+
+// Sync & Start
+sequelize.sync().then(() => app.listen(3000, () => console.log('Server running')))
