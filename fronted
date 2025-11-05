@@ -1,0 +1,36 @@
+import React, { useState, useEffect } from 'react'
+
+export default function App() {
+  const [feed, setFeed] = useState([])
+  const [text, setText] = useState('')
+  const token = localStorage.getItem('token')
+
+  useEffect(() => {
+    fetch('http://your-ec2-public-ip:3000/feed')
+      .then(r => r.json())
+      .then(setFeed)
+  }, [])
+
+  const createPost = async () => {
+    await fetch('http://your-ec2-public-ip:3000/posts', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+  }
+
+  return (
+    <div>
+      <h2>Social Feed</h2>
+      <input value={text} onChange={e => setText(e.target.value)} placeholder="What's happening?" />
+      <button onClick={createPost}>Post</button>
+      <ul>
+        {feed.map(p => (
+          <li key={p.id}>
+            <b>{p.User.username}</b>: {p.text}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
